@@ -44,7 +44,6 @@ public class WebCrawler {
             }
         }
 
-        // Start the crawler worker thread
         WorkerThread worker = new WorkerThread(queue, keyword, System.currentTimeMillis(), crawlTimeMillis, maxDepth, minRelevanceScore, "output/result.json");
         new Thread(worker).start();
     }

@@ -35,10 +35,8 @@ public final class CrawlerConfig {
     private static final String KEY_MIN_RELEVANCE_SCORE = "min_relevance_score";
     private static final String KEY_SEED_URLS = "seed_urls";
 
-    // Singleton instance
     private static final CrawlerConfig INSTANCE = new CrawlerConfig();
 
-    // Configuration fields
     private  int maxThreads;
     private  long timeoutMillis;
     private  int maxDepth;
@@ -51,7 +49,6 @@ public final class CrawlerConfig {
     private  double minRelevanceScore;
 
     private CrawlerConfig() {
-        // Initialize with default values
         this.maxThreads = DEFAULT_MAX_THREADS;
         this.timeoutMillis = DEFAULT_TIMEOUT_MILLIS;
         this.maxDepth = DEFAULT_MAX_DEPTH;
@@ -84,10 +81,8 @@ public final class CrawlerConfig {
             double minRelevanceScore = getDoubleProperty(props, KEY_MIN_RELEVANCE_SCORE, DEFAULT_MIN_RELEVANCE_SCORE);
             List<String> seedUrls = getSeedUrls(props);
 
-            // Validate configuration values
             validateConfig(maxThreads, timeoutMillis, maxDepth, politenessDelay, maxRetries, minRelevanceScore);
 
-            // Update configuration
             synchronized (this) {
                 this.maxThreads = maxThreads;
                 this.timeoutMillis = timeoutMillis;

@@ -52,7 +52,6 @@ public class WorkerThread implements Runnable {
 
     @Override
     public void run() {
-        // Start a new thread to listen for keypress to stop crawling
         startKeyListenerThread();
 
         try {
@@ -95,12 +94,12 @@ public class WorkerThread implements Runnable {
         Thread keyListenerThread = new Thread(() -> {
             System.out.println("Press any key to stop crawling...");
             try (Scanner scanner = new Scanner(System.in)) {
-                scanner.nextLine(); // Wait for user to press ENTER
-                running = false; // Stop the crawling loop
+                scanner.nextLine();
+                running = false;
                 System.out.println("Stopping crawler...");
             }
         });
-        keyListenerThread.setDaemon(true); // Allows the program to exit when the main thread finishes
+        keyListenerThread.setDaemon(true);
         keyListenerThread.start();
     }
 
@@ -109,7 +108,7 @@ public class WorkerThread implements Runnable {
             logger.info("Crawling: " + url + " (depth: " + depth + ")");
             processedUrlCount.incrementAndGet();
 
-            // Fetch search results from Google Custom Search API
+
             JSONObject searchResults = fetchGoogleSearchResults(keyword);
             if (searchResults == null) {
                 return;
@@ -126,7 +125,7 @@ public class WorkerThread implements Runnable {
                 String title = item.optString("title", "No Title");
                 String snippet = item.optString("snippet", "No Snippet");
 
-                // Calculate relevance score (example: based on keyword frequency in snippet)
+
                 double relevanceScore = calculateRelevanceScore(snippet);
 
                 if (relevanceScore >= minRelevanceScore) {
@@ -160,8 +159,8 @@ public class WorkerThread implements Runnable {
                     JSONObject item = items.getJSONObject(i);
                     String resultUrl = item.getString("link");
 
-                    // Add the URLs to the queue as seed URLs
-                    queue.put(new UrlDepthPair(resultUrl, 1)); // Start at depth 1
+
+                    queue.put(new UrlDepthPair(resultUrl, 1));
                 }
             }
         } catch (InterruptedException e) {
@@ -172,7 +171,7 @@ public class WorkerThread implements Runnable {
 
     private JSONObject fetchGoogleSearchResults(String query) {
         try {
-            // URL-encode the query to handle spaces and special characters
+
             String encodedQuery = URLEncoder.encode(query, StandardCharsets.UTF_8.toString());
             String requestUrl = String.format("%s?q=%s&key=%s&cx=%s", GOOGLE_SEARCH_URL, encodedQuery, API_KEY, SEARCH_ENGINE_ID);
 
@@ -205,20 +204,20 @@ public class WorkerThread implements Runnable {
             index = text.toLowerCase().indexOf(keyword, index + 1);
         }
 
-        return keywordCount * 1.0; // Simple relevance score based on keyword frequency
+        return keywordCount * 1.0;
     }
 
     private synchronized void saveData(JSONObject result) {
-        // Define the output file path
+
         File outputFile = new File("output/result.json");
 
         try {
-            // Create directories if they do not exist
+
             outputFile.getParentFile().mkdirs();
 
             JSONArray resultsArray;
 
-            // If the file exists and is not empty, read the existing JSON array
+
             if (outputFile.exists() && outputFile.length() > 0) {
                 try (Scanner scanner = new Scanner(outputFile)) {
                     StringBuilder jsonContent = new StringBuilder();
@@ -231,12 +230,12 @@ public class WorkerThread implements Runnable {
                 resultsArray = new JSONArray();
             }
 
-            // Add the new result to the JSON array
+
             resultsArray.put(result);
 
-            // Write the updated JSON array back to the file
-            try (FileWriter writer = new FileWriter(outputFile, false)) { // false -> overwrite file
-                writer.write(resultsArray.toString(4)); // Pretty print with 4-space indentation
+
+            try (FileWriter writer = new FileWriter(outputFile, false)) {
+                writer.write(resultsArray.toString(4));
             }
         } catch (IOException e) {
             logger.log(Level.WARNING, "Failed to save data to file", e);

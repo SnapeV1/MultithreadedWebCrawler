@@ -122,11 +122,9 @@ public class URLManager {
             String domain = url.getHost();
             String robotsUrl = url.getProtocol() + "://" + domain + "/robots.txt";
 
-            // Use a short timeout for robots.txt
             Document robotsTxt = Jsoup.connect(robotsUrl).timeout(3000).get();
             String content = robotsTxt.text();
 
-            // Parse robots.txt content (basic implementation)
             Set<String> disallowRules = new HashSet<>();
             Scanner scanner = new Scanner(content);
             boolean relevantUserAgent = false;
@@ -134,13 +132,10 @@ public class URLManager {
             while (scanner.hasNextLine()) {
                 String line = scanner.nextLine().trim();
 
-                // Check for User-agent line
                 if (line.toLowerCase().startsWith("user-agent:")) {
                     String agent = line.substring(11).trim();
-                    // Check if rule applies to us or all agents
                     relevantUserAgent = agent.equals("*") || agent.contains("bot");
                 }
-                // Process Disallow rules if they apply to us
                 else if (relevantUserAgent && line.toLowerCase().startsWith("disallow:")) {
                     String path = line.substring(9).trim();
                     if (!path.isEmpty()) {
@@ -150,21 +145,17 @@ public class URLManager {
             }
             scanner.close();
 
-            // Store rules for this domain
             robotsDisallowRules.put(domain, disallowRules);
 
         } catch (IOException e) {
-            // If robots.txt cannot be fetched, assume nothing is disallowed
             robotsDisallowRules.put(url.getHost(), new HashSet<>());
         }
     }
 
-    // Get count of visited URLs
     public static int getVisitedCount() {
         return visitedUrls.size();
     }
 
-    // Check if URL has been visited without marking it
     public static boolean isVisited(String url) {
         return visitedUrls.contains(url);
     }
