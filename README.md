@@ -29,7 +29,7 @@ This project implements a web crawler that crawls websites based on a given keyw
 
 1. Clone the repository:
    ```bash
-   git clone https://github.com/yourusername/web-crawler.git
+   git clone https://github.com/SnapeV1/web-crawler.git
    ```
 
 2. Navigate to the project directory:
