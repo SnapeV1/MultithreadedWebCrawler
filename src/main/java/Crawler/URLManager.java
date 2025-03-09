@@ -28,12 +28,10 @@ public class URLManager {
             Pattern.CASE_INSENSITIVE
     );
 
-    // Check and mark a URL as visited (return true if it wasn't visited before)
     public static boolean visit(String url) {
         return visitedUrls.add(url);
     }
 
-    // Check if the URL should be processed (valid format, not binary, etc.)
     public static boolean shouldProcess(String url) {
         // Skip empty URLs
         if (url == null || url.isEmpty()) {
@@ -41,16 +39,13 @@ public class URLManager {
         }
 
         try {
-            // Parse the URL to check protocol
             URL parsedUrl = new URL(url);
             String protocol = parsedUrl.getProtocol();
 
-            // Only process HTTP/HTTPS URLs
             if (!protocol.equals("http") && !protocol.equals("https")) {
                 return false;
             }
 
-            // Skip URLs with fragments (#) as they point to the same content
             if (url.contains("#")) {
                 String baseUrl = url.substring(0, url.indexOf('#'));
                 if (visitedUrls.contains(baseUrl)) {
@@ -58,26 +53,21 @@ public class URLManager {
                 }
             }
 
-            // Skip common binary files
             if (BINARY_EXTENSIONS.matcher(url).matches()) {
                 return false;
             }
 
-            // Check robots.txt rules
             if (!isAllowedByRobotsTxt(url)) {
                 return false;
             }
 
-            // URL passed all checks
             return true;
 
         } catch (Exception e) {
-            // If URL is malformed or causes other issues, skip it
             return false;
         }
     }
 
-    // Apply politeness delay based on domain
     public static void applyPolitenessDelay(String url) {
         try {
             URL parsedUrl = new URL(url);
@@ -95,27 +85,22 @@ public class URLManager {
                 }
             }
 
-            // Update the last access time for this domain
             lastAccessTimes.put(domain, System.currentTimeMillis());
 
         } catch (Exception e) {
-            // If URL parsing fails, continue without delay
         }
     }
 
-    // Check if URL is allowed by robots.txt
     private static boolean isAllowedByRobotsTxt(String url) {
         try {
             URL parsedUrl = new URL(url);
             String domain = parsedUrl.getHost();
             String path = parsedUrl.getPath();
 
-            // If we haven't checked robots.txt for this domain yet
             if (!robotsDisallowRules.containsKey(domain)) {
                 fetchRobotsTxtRules(parsedUrl);
             }
 
-            // Check if the path matches any disallow rule
             Set<String> disallowRules = robotsDisallowRules.get(domain);
             if (disallowRules != null) {
                 for (String rule : disallowRules) {
@@ -127,7 +112,6 @@ public class URLManager {
 
             return true;
         } catch (Exception e) {
-            // If any error occurs, assume allowed
             return true;
         }
     }

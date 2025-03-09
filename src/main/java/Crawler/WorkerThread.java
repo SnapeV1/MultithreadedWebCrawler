@@ -1,29 +1,32 @@
 package Crawler;
 
+import io.github.cdimascio.dotenv.Dotenv;
 import org.json.JSONArray;
 import org.json.JSONObject;
-import org.jsoup.Jsoup;
-import org.jsoup.HttpStatusException;
-import org.jsoup.nodes.Document;
-import org.jsoup.nodes.Element;
-import org.jsoup.select.Elements;
 
+import java.io.File;
+import java.io.FileWriter;
 import java.io.IOException;
-import java.net.URL;
-import java.nio.file.Files;
-import java.nio.file.Path;
-import java.nio.file.Paths;
-import java.nio.file.StandardOpenOption;
-import java.util.List;
-import java.util.Set;
-import java.util.HashSet;
-import java.util.logging.Logger;
-import java.util.logging.Level;
+import java.net.URI;
+import java.net.URLEncoder;
+import java.net.http.HttpClient;
+import java.net.http.HttpRequest;
+import java.net.http.HttpResponse;
+import java.nio.charset.StandardCharsets;
+import java.util.Scanner;
 import java.util.concurrent.BlockingQueue;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
-import java.util.concurrent.locks.ReentrantLock;
+import java.util.logging.Level;
+import java.util.logging.Logger;
 
 public class WorkerThread implements Runnable {
+    private static final Logger logger = Logger.getLogger(WorkerThread.class.getName());
+    private static final Dotenv dotenv = Dotenv.load();
+
+    private static final String API_KEY = dotenv.get("GOOGLE_API_KEY");
+    private static final String SEARCH_ENGINE_ID = dotenv.get("GOOGLE_SEARCH_ENGINE_ID");
+    private static final String GOOGLE_SEARCH_URL = "https://www.googleapis.com/customsearch/v1";
 
     private final BlockingQueue<UrlDepthPair> queue;
     private final String keyword;
@@ -31,14 +34,10 @@ public class WorkerThread implements Runnable {
     private final long timeoutMillis;
     private final int maxDepth;
     private final double minRelevanceScore;
-    private final Set<String> contentHashes = new HashSet<>();
     private final String outputFile;
     private static final AtomicInteger processedUrlCount = new AtomicInteger(0);
     private static final AtomicInteger matchedUrlCount = new AtomicInteger(0);
-    private static final int MAX_RETRIES = 2;
-    private static final String USER_AGENT = "Mozilla/5.0 (compatible; MyWebCrawler/1.0)";
-    private static final Logger logger = Logger.getLogger(WorkerThread.class.getName());
-    private final ReentrantLock lock = new ReentrantLock();
+    private static volatile boolean running = true;
 
     public WorkerThread(BlockingQueue<UrlDepthPair> queue, String keyword, long startTime,
                         long timeoutMillis, int maxDepth, double minRelevanceScore, String outputFile) {
@@ -53,9 +52,21 @@ public class WorkerThread implements Runnable {
 
     @Override
     public void run() {
+        // Start a new thread to listen for keypress to stop crawling
+        startKeyListenerThread();
+
         try {
-            while (System.currentTimeMillis() - startTime < timeoutMillis) {
-                UrlDepthPair pair = queue.take();
+            if (queue.isEmpty()) {
+                logger.info("Queue is empty, performing Google Custom Search to seed the URLs...");
+                fetchAndAddSeedUrls(keyword);
+            }
+
+            while (running && (System.currentTimeMillis() - startTime < timeoutMillis)) {
+                UrlDepthPair pair = queue.poll(500, TimeUnit.MILLISECONDS);
+                if (!running) break;
+
+                if (pair == null) continue;
+
                 String url = pair.url();
                 int depth = pair.depth();
 
@@ -73,71 +84,62 @@ public class WorkerThread implements Runnable {
                             processed, matchedUrlCount.get()));
                 }
             }
-            logger.info("Timeout reached, stopping crawling...");
+            logger.info("Stopping crawling...");
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
             logger.log(Level.WARNING, "Worker thread interrupted", e);
         }
     }
 
-    private void crawl(String url, int depth) {
-        URLManager.applyPolitenessDelay(url);
+    private void startKeyListenerThread() {
+        Thread keyListenerThread = new Thread(() -> {
+            System.out.println("Press any key to stop crawling...");
+            try (Scanner scanner = new Scanner(System.in)) {
+                scanner.nextLine(); // Wait for user to press ENTER
+                running = false; // Stop the crawling loop
+                System.out.println("Stopping crawler...");
+            }
+        });
+        keyListenerThread.setDaemon(true); // Allows the program to exit when the main thread finishes
+        keyListenerThread.start();
+    }
 
+    private void crawl(String url, int depth) {
         try {
             logger.info("Crawling: " + url + " (depth: " + depth + ")");
             processedUrlCount.incrementAndGet();
 
-            Document doc = fetchWithRetry(url);
-            if (doc == null) {
+            // Fetch search results from Google Custom Search API
+            JSONObject searchResults = fetchGoogleSearchResults(keyword);
+            if (searchResults == null) {
                 return;
             }
 
-            double relevanceScore = calculateRelevanceScore(doc);
-
-            if (relevanceScore >= minRelevanceScore) {
-                JSONArray resultsArray = new JSONArray();
-
-                String title = doc.title();
-                String publicationDate = extractPublicationDate(doc);
-                String author = extractAuthor(doc);
-
-                for (Element paragraph : doc.select("p, article, section")) {
-                    String text = paragraph.text().trim();
-                    if (!text.isEmpty() && text.toLowerCase().contains(keyword)) {
-                        String contentHash = String.valueOf(text.hashCode());
-                        if (contentHashes.add(contentHash)) {
-                            JSONObject jsonObject = new JSONObject();
-                            jsonObject.put("url", url);
-                            jsonObject.put("title", title);
-                            jsonObject.put("content", text);
-                            jsonObject.put("date", publicationDate);
-                            jsonObject.put("author", author);
-                            jsonObject.put("relevance_score", relevanceScore);
-                            jsonObject.put("crawl_depth", depth);
-                            jsonObject.put("crawl_time", System.currentTimeMillis());
-                            resultsArray.put(jsonObject);
-                        }
-                    }
-                }
-
-                if (resultsArray.length() > 0) {
-                    saveData(resultsArray);
-                    matchedUrlCount.incrementAndGet();
-                }
+            JSONArray items = searchResults.optJSONArray("items");
+            if (items == null) {
+                return;
             }
 
-            if (depth < maxDepth) {
-                Elements links = doc.select("a[href]");
-                int linkCount = 0;
+            for (int i = 0; i < items.length(); i++) {
+                JSONObject item = items.getJSONObject(i);
+                String resultUrl = item.getString("link");
+                String title = item.optString("title", "No Title");
+                String snippet = item.optString("snippet", "No Snippet");
 
-                for (Element link : links) {
-                    if (linkCount > 50) break;
+                // Calculate relevance score (example: based on keyword frequency in snippet)
+                double relevanceScore = calculateRelevanceScore(snippet);
 
-                    String nextUrl = normalizeUrl(link.absUrl("href"));
-                    if (!nextUrl.isEmpty() && URLManager.shouldProcess(nextUrl) && !URLManager.isVisited(nextUrl)) {
-                        queue.put(new UrlDepthPair(nextUrl, depth + 1));
-                        linkCount++;
-                    }
+                if (relevanceScore >= minRelevanceScore) {
+                    JSONObject result = new JSONObject();
+                    result.put("url", resultUrl);
+                    result.put("title", title);
+                    result.put("content", snippet);
+                    result.put("relevance_score", relevanceScore);
+                    result.put("crawl_depth", depth);
+                    result.put("crawl_time", System.currentTimeMillis());
+
+                    saveData(result);
+                    matchedUrlCount.incrementAndGet();
                 }
             }
         } catch (Exception e) {
@@ -145,201 +147,102 @@ public class WorkerThread implements Runnable {
         }
     }
 
-    private Document fetchWithRetry(String url) {
-        Exception lastException = null;
-
-        for (int attempt = 0; attempt <= MAX_RETRIES; attempt++) {
-            try {
-                int timeout = 5000 + (attempt * 2000);
-
-                return Jsoup.connect(url)
-                        .userAgent(USER_AGENT)
-                        .timeout(timeout)
-                        .followRedirects(true)
-                        .get();
-
-            } catch (HttpStatusException e) {
-                if (e.getStatusCode() >= 400 && e.getStatusCode() < 500) {
-                    logger.warning("Client error " + e.getStatusCode() + " for URL: " + url);
-                    return null;
-                }
-                lastException = e;
-            } catch (IOException e) {
-                lastException = e;
-            }
-
-            if (attempt < MAX_RETRIES) {
-                try {
-                    Thread.sleep(1000 * (attempt + 1));
-                } catch (InterruptedException ie) {
-                    Thread.currentThread().interrupt();
-                    return null;
-                }
-            }
-        }
-
-        logger.warning("Failed to fetch after " + MAX_RETRIES + " retries: " + url +
-                " (" + lastException.getMessage() + ")");
-        return null;
-    }
-
-    private String normalizeUrl(String url) {
+    void fetchAndAddSeedUrls(String keyword) {
         try {
-            URL parsedUrl = new URL(url);
-            String normalizedUrl = new URL(parsedUrl.getProtocol(),
-                    parsedUrl.getHost(),
-                    parsedUrl.getPort(),
-                    parsedUrl.getPath()).toString();
-            return normalizedUrl;
-        } catch (Exception e) {
-            return url;
+            JSONObject searchResults = fetchGoogleSearchResults(keyword);
+            if (searchResults == null) {
+                return;
+            }
+
+            JSONArray items = searchResults.optJSONArray("items");
+            if (items != null) {
+                for (int i = 0; i < items.length(); i++) {
+                    JSONObject item = items.getJSONObject(i);
+                    String resultUrl = item.getString("link");
+
+                    // Add the URLs to the queue as seed URLs
+                    queue.put(new UrlDepthPair(resultUrl, 1)); // Start at depth 1
+                }
+            }
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            logger.log(Level.WARNING, "Error while adding seed URLs to the queue", e);
         }
     }
 
-    private double calculateRelevanceScore(Document doc) {
-        String pageText = doc.text().toLowerCase();
+    private JSONObject fetchGoogleSearchResults(String query) {
+        try {
+            // URL-encode the query to handle spaces and special characters
+            String encodedQuery = URLEncoder.encode(query, StandardCharsets.UTF_8.toString());
+            String requestUrl = String.format("%s?q=%s&key=%s&cx=%s", GOOGLE_SEARCH_URL, encodedQuery, API_KEY, SEARCH_ENGINE_ID);
+
+            HttpClient client = HttpClient.newHttpClient();
+            HttpRequest request = HttpRequest.newBuilder()
+                    .uri(URI.create(requestUrl))
+                    .GET()
+                    .build();
+
+            HttpResponse<String> response = client.send(request, HttpResponse.BodyHandlers.ofString());
+
+            if (response.statusCode() == 200) {
+                return new JSONObject(response.body());
+            } else {
+                logger.warning("Failed to fetch search results: " + response.body());
+                return null;
+            }
+        } catch (IOException | InterruptedException e) {
+            logger.log(Level.WARNING, "Error fetching Google search results", e);
+            return null;
+        }
+    }
+
+    private double calculateRelevanceScore(String text) {
         int keywordCount = 0;
-        int index = pageText.indexOf(keyword);
+        int index = text.toLowerCase().indexOf(keyword);
 
         while (index != -1) {
             keywordCount++;
-            index = pageText.indexOf(keyword, index + 1);
+            index = text.toLowerCase().indexOf(keyword, index + 1);
         }
 
-        String title = doc.title().toLowerCase();
-        boolean inTitle = title.contains(keyword);
-
-        String url = doc.location().toLowerCase();
-        boolean inUrl = url.contains(keyword);
-
-        boolean inHeading = false;
-        Elements headings = doc.select("h1, h2, h3");
-        for (Element heading : headings) {
-            if (heading.text().toLowerCase().contains(keyword)) {
-                inHeading = true;
-                break;
-            }
-        }
-
-        double score = keywordCount * 0.5;
-        if (inTitle) score += 5.0;
-        if (inUrl) score += 3.0;
-        if (inHeading) score += 2.0;
-
-        int contentLength = pageText.length();
-        if (contentLength > 2000) score *= 1.2;
-
-        return score;
+        return keywordCount * 1.0; // Simple relevance score based on keyword frequency
     }
 
-    private String extractPublicationDate(Document doc) {
-        Element timeElement = doc.selectFirst("time");
-        if (timeElement != null) {
-            String datetime = timeElement.attr("datetime");
-            if (!datetime.isEmpty()) {
-                return datetime;
-            }
-        }
+    private synchronized void saveData(JSONObject result) {
+        // Define the output file path
+        File outputFile = new File("output/result.json");
 
-        String[] dateMetaTags = {
-                "meta[property=article:published_time]",
-                "meta[name=pubdate]",
-                "meta[name=publication_date]",
-                "meta[name=date]",
-                "meta[name=article.published]"
-        };
-
-        for (String selector : dateMetaTags) {
-            Element metaDate = doc.selectFirst(selector);
-            if (metaDate != null) {
-                String content = metaDate.attr("content");
-                if (!content.isEmpty()) {
-                    return content;
-                }
-            }
-        }
-
-        String[] dateSelectors = {
-                ".date", ".publish-date", ".timestamp", ".article-date",
-                "#date", "#published-date", ".posted-on"
-        };
-
-        for (String selector : dateSelectors) {
-            Element dateElement = doc.selectFirst(selector);
-            if (dateElement != null) {
-                String dateText = dateElement.text().trim();
-                if (!dateText.isEmpty()) {
-                    return dateText;
-                }
-            }
-        }
-
-        return "Unknown Date";
-    }
-
-    private String extractAuthor(Document doc) {
-        String[] authorMetaTags = {
-                "meta[property=article:author]",
-                "meta[name=author]",
-                "meta[name=dc.creator]"
-        };
-
-        for (String selector : authorMetaTags) {
-            Element metaAuthor = doc.selectFirst(selector);
-            if (metaAuthor != null) {
-                String content = metaAuthor.attr("content");
-                if (!content.isEmpty()) {
-                    return content;
-                }
-            }
-        }
-
-        String[] authorSelectors = {
-                ".author", ".byline", ".article-author", ".entry-author",
-                "#author", "[rel=author]", ".contributor"
-        };
-
-        for (String selector : authorSelectors) {
-            Element authorElement = doc.selectFirst(selector);
-            if (authorElement != null) {
-                String authorText = authorElement.text().trim();
-                if (!authorText.isEmpty()) {
-                    return authorText;
-                }
-            }
-        }
-
-        return "Unknown Author";
-    }
-
-    private void saveData(JSONArray jsonArray) {
-        lock.lock();
         try {
-            Path path = Paths.get(outputFile);
-            List<String> existingData = Files.exists(path) ?
-                    Files.readAllLines(path) : List.of();
+            // Create directories if they do not exist
+            outputFile.getParentFile().mkdirs();
 
-            JSONArray finalArray = existingData.isEmpty() ?
-                    new JSONArray() : new JSONArray(String.join("", existingData));
+            JSONArray resultsArray;
 
-            for (int i = 0; i < jsonArray.length(); i++) {
-                finalArray.put(jsonArray.getJSONObject(i));
+            // If the file exists and is not empty, read the existing JSON array
+            if (outputFile.exists() && outputFile.length() > 0) {
+                try (Scanner scanner = new Scanner(outputFile)) {
+                    StringBuilder jsonContent = new StringBuilder();
+                    while (scanner.hasNextLine()) {
+                        jsonContent.append(scanner.nextLine());
+                    }
+                    resultsArray = new JSONArray(jsonContent.toString());
+                }
+            } else {
+                resultsArray = new JSONArray();
             }
 
-            Files.write(
-                    path,
-                    finalArray.toString(4).getBytes(),
-                    StandardOpenOption.CREATE,
-                    StandardOpenOption.TRUNCATE_EXISTING
-            );
+            // Add the new result to the JSON array
+            resultsArray.put(result);
 
-            logger.info("Saved " + jsonArray.length() + " results to " + outputFile);
+            // Write the updated JSON array back to the file
+            try (FileWriter writer = new FileWriter(outputFile, false)) { // false -> overwrite file
+                writer.write(resultsArray.toString(4)); // Pretty print with 4-space indentation
+            }
         } catch (IOException e) {
-            logger.log(Level.SEVERE, "Failed to save data", e);
-        } finally {
-            lock.unlock();
+            logger.log(Level.WARNING, "Failed to save data to file", e);
         }
     }
+
 
     public record UrlDepthPair(String url, int depth) {
     }

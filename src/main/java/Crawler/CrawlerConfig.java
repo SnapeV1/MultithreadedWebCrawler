@@ -3,105 +3,212 @@ package Crawler;
 import java.io.FileInputStream;
 import java.io.IOException;
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.List;
 import java.util.Properties;
+import java.util.logging.Level;
 import java.util.logging.Logger;
 
-class CrawlerConfig {
-    private static final CrawlerConfig instance = new CrawlerConfig();
+public final class CrawlerConfig {
+    private static final Logger logger = Logger.getLogger(CrawlerConfig.class.getName());
 
-    private int maxThreads = 5;
-    private long timeoutMillis = 10 * 60 * 1000; // 10 minutes
-    private int maxDepth = 3;
-    private long politenessDelay = 1000;
-    private List<String> seedUrls = new ArrayList<>();
-    private String outputFile = "output/results.json";
-    private int maxRetries = 2;
-    private boolean respectRobotsTxt = true;
-    private String userAgent = "Mozilla/5.0 (compatible; MyWebCrawler/1.0)";
-    private double minRelevanceScore = 1.0;
+    // Default configuration values
+    private static final int DEFAULT_MAX_THREADS = 5;
+    private static final long DEFAULT_TIMEOUT_MILLIS = 10 * 60 * 1000;
+    private static final int DEFAULT_MAX_DEPTH = 3;
+    private static final long DEFAULT_POLITENESS_DELAY = 1000;
+    private static final String DEFAULT_OUTPUT_FILE = "output/results.json";
+    private static final int DEFAULT_MAX_RETRIES = 2;
+    private static final boolean DEFAULT_RESPECT_ROBOTS_TXT = true;
+    private static final String DEFAULT_USER_AGENT = "Mozilla/5.0 (compatible; MyWebCrawler/1.0)";
+    private static final double DEFAULT_MIN_RELEVANCE_SCORE = 1.0;
+
+    // Configuration keys
+    private static final String KEY_MAX_THREADS = "max_threads";
+    private static final String KEY_TIMEOUT_MINUTES = "timeout_minutes";
+    private static final String KEY_MAX_DEPTH = "max_depth";
+    private static final String KEY_POLITENESS_DELAY = "politeness_delay";
+    private static final String KEY_OUTPUT_FILE = "output_file";
+    private static final String KEY_MAX_RETRIES = "max_retries";
+    private static final String KEY_RESPECT_ROBOTS_TXT = "respect_robots_txt";
+    private static final String KEY_USER_AGENT = "user_agent";
+    private static final String KEY_MIN_RELEVANCE_SCORE = "min_relevance_score";
+    private static final String KEY_SEED_URLS = "seed_urls";
+
+    // Singleton instance
+    private static final CrawlerConfig INSTANCE = new CrawlerConfig();
+
+    // Configuration fields
+    private  int maxThreads;
+    private  long timeoutMillis;
+    private  int maxDepth;
+    private  long politenessDelay;
+    private  List<String> seedUrls;
+    private  String outputFile;
+    private  int maxRetries;
+    private  boolean respectRobotsTxt;
+    private  String userAgent;
+    private  double minRelevanceScore;
 
     private CrawlerConfig() {
-        // Private constructor for singleton
+        // Initialize with default values
+        this.maxThreads = DEFAULT_MAX_THREADS;
+        this.timeoutMillis = DEFAULT_TIMEOUT_MILLIS;
+        this.maxDepth = DEFAULT_MAX_DEPTH;
+        this.politenessDelay = DEFAULT_POLITENESS_DELAY;
+        this.seedUrls = new ArrayList<>(getDefaultSeedUrls());
+        this.outputFile = DEFAULT_OUTPUT_FILE;
+        this.maxRetries = DEFAULT_MAX_RETRIES;
+        this.respectRobotsTxt = DEFAULT_RESPECT_ROBOTS_TXT;
+        this.userAgent = DEFAULT_USER_AGENT;
+        this.minRelevanceScore = DEFAULT_MIN_RELEVANCE_SCORE;
     }
 
     public static CrawlerConfig getInstance() {
-        return instance;
+        return INSTANCE;
     }
 
     public void loadFromFile(String configFile) {
         Properties props = new Properties();
-        Logger logger = Logger.getLogger(CrawlerConfig.class.getName());
-
         try (FileInputStream in = new FileInputStream(configFile)) {
             props.load(in);
 
-            if (props.containsKey("max_threads"))
-                maxThreads = Integer.parseInt(props.getProperty("max_threads"));
+            int maxThreads = getIntProperty(props, KEY_MAX_THREADS, DEFAULT_MAX_THREADS);
+            long timeoutMillis = getLongProperty(props, KEY_TIMEOUT_MINUTES, DEFAULT_TIMEOUT_MILLIS / (60 * 1000)) * 60 * 1000;
+            int maxDepth = getIntProperty(props, KEY_MAX_DEPTH, DEFAULT_MAX_DEPTH);
+            long politenessDelay = getLongProperty(props, KEY_POLITENESS_DELAY, DEFAULT_POLITENESS_DELAY);
+            String outputFile = props.getProperty(KEY_OUTPUT_FILE, DEFAULT_OUTPUT_FILE);
+            int maxRetries = getIntProperty(props, KEY_MAX_RETRIES, DEFAULT_MAX_RETRIES);
+            boolean respectRobotsTxt = getBooleanProperty(props, KEY_RESPECT_ROBOTS_TXT, DEFAULT_RESPECT_ROBOTS_TXT);
+            String userAgent = props.getProperty(KEY_USER_AGENT, DEFAULT_USER_AGENT);
+            double minRelevanceScore = getDoubleProperty(props, KEY_MIN_RELEVANCE_SCORE, DEFAULT_MIN_RELEVANCE_SCORE);
+            List<String> seedUrls = getSeedUrls(props);
 
-            if (props.containsKey("timeout_minutes"))
-                timeoutMillis = Long.parseLong(props.getProperty("timeout_minutes")) * 60 * 1000;
+            // Validate configuration values
+            validateConfig(maxThreads, timeoutMillis, maxDepth, politenessDelay, maxRetries, minRelevanceScore);
 
-            if (props.containsKey("max_depth"))
-                maxDepth = Integer.parseInt(props.getProperty("max_depth"));
-
-            if (props.containsKey("politeness_delay"))
-                politenessDelay = Long.parseLong(props.getProperty("politeness_delay"));
-
-            if (props.containsKey("output_file"))
-                outputFile = props.getProperty("output_file");
-
-            if (props.containsKey("max_retries"))
-                maxRetries = Integer.parseInt(props.getProperty("max_retries"));
-
-            if (props.containsKey("respect_robots_txt"))
-                respectRobotsTxt = Boolean.parseBoolean(props.getProperty("respect_robots_txt"));
-
-            if (props.containsKey("user_agent"))
-                userAgent = props.getProperty("user_agent");
-
-            if (props.containsKey("min_relevance_score"))
-                minRelevanceScore = Double.parseDouble(props.getProperty("min_relevance_score"));
-
-            seedUrls.clear();
-            if (props.containsKey("seed_urls")) {
-                String seedUrlsStr = props.getProperty("seed_urls");
-                for (String url : seedUrlsStr.split(",")) {
-                    url = url.trim();
-                    if (!url.isEmpty()) {
-                        seedUrls.add(url);
-                    }
-                }
+            // Update configuration
+            synchronized (this) {
+                this.maxThreads = maxThreads;
+                this.timeoutMillis = timeoutMillis;
+                this.maxDepth = maxDepth;
+                this.politenessDelay = politenessDelay;
+                this.seedUrls.clear();
+                this.seedUrls.addAll(seedUrls);
+                this.outputFile = outputFile;
+                this.maxRetries = maxRetries;
+                this.respectRobotsTxt = respectRobotsTxt;
+                this.userAgent = userAgent;
+                this.minRelevanceScore = minRelevanceScore;
             }
 
-            logger.info("Loaded configuration from " + configFile);
+            logger.info("Configuration loaded successfully from " + configFile);
         } catch (IOException e) {
-            logger.warning("Failed to load configuration file. Using defaults.");
+            logger.log(Level.WARNING, "Failed to load configuration file. Using defaults.", e);
             loadDefaults();
         }
     }
 
-    public void loadDefaults() {
-        maxThreads = 5;
-        timeoutMillis = 10 * 60 * 1000;
-        maxDepth = 3;
-        politenessDelay = 1000;
-        seedUrls.clear();
-        seedUrls.add("https://www.wikipedia.org");
-        outputFile = "output/results.json";
-        maxRetries = 2;
-        respectRobotsTxt = true;
-        userAgent = "Mozilla/5.0 (compatible; MyWebCrawler/1.0)";
-        minRelevanceScore = 1.0;
+    private int getIntProperty(Properties props, String key, int defaultValue) {
+        try {
+            return Integer.parseInt(props.getProperty(key, String.valueOf(defaultValue)));
+        } catch (NumberFormatException e) {
+            logger.warning("Invalid value for " + key + ". Using default: " + defaultValue);
+            return defaultValue;
+        }
     }
 
+    private long getLongProperty(Properties props, String key, long defaultValue) {
+        try {
+            return Long.parseLong(props.getProperty(key, String.valueOf(defaultValue)));
+        } catch (NumberFormatException e) {
+            logger.warning("Invalid value for " + key + ". Using default: " + defaultValue);
+            return defaultValue;
+        }
+    }
+
+    private double getDoubleProperty(Properties props, String key, double defaultValue) {
+        try {
+            return Double.parseDouble(props.getProperty(key, String.valueOf(defaultValue)));
+        } catch (NumberFormatException e) {
+            logger.warning("Invalid value for " + key + ". Using default: " + defaultValue);
+            return defaultValue;
+        }
+    }
+
+    private boolean getBooleanProperty(Properties props, String key, boolean defaultValue) {
+        String value = props.getProperty(key, String.valueOf(defaultValue));
+        return Boolean.parseBoolean(value);
+    }
+
+    private List<String> getSeedUrls(Properties props) {
+        List<String> urls = new ArrayList<>();
+        if (props.containsKey(KEY_SEED_URLS)) {
+            String seedUrlsStr = props.getProperty(KEY_SEED_URLS);
+            for (String url : seedUrlsStr.split(",")) {
+                url = url.trim();
+                if (!url.isEmpty()) {
+                    urls.add(url);
+                }
+            }
+        }
+        return urls.isEmpty() ? getDefaultSeedUrls() : urls;
+    }
+
+    private List<String> getDefaultSeedUrls() {
+        List<String> defaultSeedUrls = new ArrayList<>();
+
+       // defaultSeedUrls.add("https://www.bbc.com/news");
+
+
+
+        return defaultSeedUrls;
+    }
+
+    private void validateConfig(int maxThreads, long timeoutMillis, int maxDepth, long politenessDelay, int maxRetries, double minRelevanceScore) {
+        if (maxThreads <= 0) {
+            throw new IllegalArgumentException("max_threads must be greater than 0");
+        }
+        if (timeoutMillis <= 0) {
+            throw new IllegalArgumentException("timeout_minutes must be greater than 0");
+        }
+        if (maxDepth <= 0) {
+            throw new IllegalArgumentException("max_depth must be greater than 0");
+        }
+        if (politenessDelay < 0) {
+            throw new IllegalArgumentException("politeness_delay must be non-negative");
+        }
+        if (maxRetries < 0) {
+            throw new IllegalArgumentException("max_retries must be non-negative");
+        }
+        if (minRelevanceScore < 0) {
+            throw new IllegalArgumentException("min_relevance_score must be non-negative");
+        }
+    }
+
+    public void loadDefaults() {
+        synchronized (this) {
+            this.maxThreads = DEFAULT_MAX_THREADS;
+            this.timeoutMillis = DEFAULT_TIMEOUT_MILLIS;
+            this.maxDepth = DEFAULT_MAX_DEPTH;
+            this.politenessDelay = DEFAULT_POLITENESS_DELAY;
+            this.seedUrls.clear();
+            this.seedUrls.addAll(getDefaultSeedUrls());
+            this.outputFile = DEFAULT_OUTPUT_FILE;
+            this.maxRetries = DEFAULT_MAX_RETRIES;
+            this.respectRobotsTxt = DEFAULT_RESPECT_ROBOTS_TXT;
+            this.userAgent = DEFAULT_USER_AGENT;
+            this.minRelevanceScore = DEFAULT_MIN_RELEVANCE_SCORE;
+        }
+        logger.info("Loaded default configuration");
+    }
+
+    // Getters
     public int getMaxThreads() { return maxThreads; }
     public long getTimeoutMillis() { return timeoutMillis; }
-    public void setTimeoutMillis(long timeoutMillis) { this.timeoutMillis = timeoutMillis; }
     public int getMaxDepth() { return maxDepth; }
-    public void setMaxDepth(int maxDepth) { this.maxDepth = maxDepth; }
     public long getPolitenessDelay() { return politenessDelay; }
-    public List<String> getSeedUrls() { return seedUrls; }
+    public List<String> getSeedUrls() { return Collections.unmodifiableList(seedUrls); }
     public String getOutputFile() { return outputFile; }
     public int getMaxRetries() { return maxRetries; }
     public boolean isRespectRobotsTxt() { return respectRobotsTxt; }
